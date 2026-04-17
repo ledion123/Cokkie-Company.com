@@ -1,14 +1,21 @@
 """
 Ashvale Civil Engineering - Daily Inspection Checker
-Fetches LOLER/PUWER inspections from Safety Culture, analyses with Claude, emails report
+Fetches LOLER/PUWER inspections from Safety Culture, analyses with Claude,
+generates a colour-coded Excel report and emails it as an .xlsx attachment.
 """
 
+import io
+import json
 import requests
 import smtplib
 import anthropic
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 # ─────────────────────────────────────────
 # CONFIGURATION — fill these in
@@ -22,15 +29,63 @@ TEMPLATE_IDS = [
     # "template_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",  # PUWER — add when ready
 ]
 
-# Email settings
 SMTP_SERVER    = "smtp.gmail.com"
 SMTP_PORT      = 587
 EMAIL_FROM     = "YOUR_EMAIL@gmail.com"
 EMAIL_PASSWORD = "YOUR_APP_PASSWORD"   # Gmail App Password, not your normal password
 EMAIL_TO       = "YOUR_EMAIL@ashvale.co.uk"
 
-# How many days back to look
 MAX_DAYS_BACK = 30
+
+# ─────────────────────────────────────────
+# COLOURS
+# ─────────────────────────────────────────
+
+FILL_HEADER   = PatternFill("solid", fgColor="F4A460")   # salmon/orange header
+FILL_RAMS_HDR = PatternFill("solid", fgColor="FFFF00")   # yellow RAMS header
+FILL_YELLOW   = PatternFill("solid", fgColor="FFFF00")   # warning cell
+FILL_RED      = PatternFill("solid", fgColor="FF0000")   # critical note
+FILL_NONE     = PatternFill("none")
+
+FONT_HEADER   = Font(bold=True, color="000000")
+FONT_WHITE    = Font(bold=True, color="FFFFFF")
+FONT_BLACK    = Font(color="000000")
+
+THIN_BORDER = Border(
+    left=Side(style="thin"), right=Side(style="thin"),
+    top=Side(style="thin"),  bottom=Side(style="thin"),
+)
+
+COLUMNS = [
+    ("SITE",      22),
+    ("JOB NO",    9),
+    ("PUWER",     8),
+    ("LOLER",     8),
+    ("SITE SUP",  9),
+    ("XCAVATOR",  10),
+    ("DUMPER",    9),
+    ("ROLLER",    9),
+    ("TELEHAND",  11),
+    ("HAVS",      8),
+    ("TOOLBOX",   10),
+    ("RAMS",      8),
+    ("SUPERVISOR",16),
+    ("NOTES",     45),
+]
+
+# Maps column header → Claude JSON key
+COL_KEY = {
+    "PUWER":    "puwer",
+    "LOLER":    "loler",
+    "SITE SUP": "site_sup",
+    "XCAVATOR": "xcavator",
+    "DUMPER":   "dumper",
+    "ROLLER":   "roller",
+    "TELEHAND": "telehand",
+    "HAVS":     "havs",
+    "TOOLBOX":  "toolbox",
+    "RAMS":     "rams",
+}
 
 # ─────────────────────────────────────────
 # SAFETY CULTURE API
@@ -39,11 +94,11 @@ MAX_DAYS_BACK = 30
 def sc_headers():
     return {
         "Authorization": f"Bearer {SAFETY_CULTURE_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
+
 def get_inspection_ids(template_id, days_back=30):
-    """Fetch list of inspection IDs for a template from the last N days"""
     modified_after = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
     url = "https://api.safetyculture.io/audits/search"
     params = {
@@ -51,7 +106,7 @@ def get_inspection_ids(template_id, days_back=30):
         "template": template_id,
         "modified_after": modified_after,
         "completed": "true",
-        "limit": 100
+        "limit": 100,
     }
     r = requests.get(url, headers=sc_headers(), params=params)
     r.raise_for_status()
@@ -59,7 +114,6 @@ def get_inspection_ids(template_id, days_back=30):
 
 
 def get_inspection_detail(audit_id):
-    """Fetch full inspection detail"""
     url = f"https://api.safetyculture.io/audits/{audit_id}"
     r = requests.get(url, headers=sc_headers())
     r.raise_for_status()
@@ -67,13 +121,8 @@ def get_inspection_detail(audit_id):
 
 
 def get_most_recent_ids(inspections_raw):
-    """Sort by most recent, return top 20 audit IDs"""
-    sorted_inspections = sorted(
-        inspections_raw,
-        key=lambda x: x.get("modified_at", ""),
-        reverse=True
-    )
-    return [i["audit_id"] for i in sorted_inspections[:20]]
+    sorted_insp = sorted(inspections_raw, key=lambda x: x.get("modified_at", ""), reverse=True)
+    return [i["audit_id"] for i in sorted_insp[:20]]
 
 
 # ─────────────────────────────────────────
@@ -81,7 +130,6 @@ def get_most_recent_ids(inspections_raw):
 # ─────────────────────────────────────────
 
 def parse_inspection(inspection):
-    """Extract key fields from inspection using correct data structure"""
     audit_data    = inspection.get("audit_data", {})
     template_data = inspection.get("template_data", {})
     items         = inspection.get("items", [])
@@ -93,6 +141,7 @@ def parse_inspection(inspection):
     score         = audit_data.get("score")
     total         = audit_data.get("total_score")
     pct           = audit_data.get("score_percentage")
+    job_no        = audit_data.get("reference_id") or audit_data.get("audit_id", "")[:8]
     template_name = template_data.get("metadata", {}).get("name", "Unknown Template")
 
     try:
@@ -113,31 +162,27 @@ def parse_inspection(inspection):
         status    = selected[0].get("label", "").strip() if selected else ""
 
         line = label
-        if status:
-            line += f": {status}"
-        if text_resp:
-            line += f" | text: {text_resp}"
-        if note:
-            line += f" | note: {note}"
+        if status:   line += f": {status}"
+        if text_resp: line += f" | text: {text_resp}"
+        if note:     line += f" | note: {note}"
         equipment_lines.append(line)
 
-    full_text = f"""Template: {template_name}
-Site: {site}
-Date: {date_formatted}
-Supervisor: {supervisor}
-Score: {score} / {total} ({pct}%)
-Signed Off: {'Yes' if completed else 'No'}
-
-EQUIPMENT / ITEMS:
-{chr(10).join(equipment_lines)}
-"""
+    full_text = (
+        f"Template: {template_name}\n"
+        f"Site: {site}\n"
+        f"Date: {date_formatted}\n"
+        f"Supervisor: {supervisor}\n"
+        f"Score: {score} / {total} ({pct}%)\n"
+        f"Signed Off: {'Yes' if completed else 'No'}\n\n"
+        f"EQUIPMENT / ITEMS:\n" + "\n".join(equipment_lines)
+    )
 
     return {
         "audit_id":      inspection.get("audit_id", ""),
         "site":          site,
+        "job_no":        job_no,
         "supervisor":    supervisor,
         "date":          date_formatted,
-        "score":         f"{score} / {total} ({pct}%)" if score is not None else "Not recorded",
         "signed":        bool(completed),
         "template_name": template_name,
         "full_text":     full_text,
@@ -145,120 +190,179 @@ EQUIPMENT / ITEMS:
 
 
 # ─────────────────────────────────────────
-# CLAUDE ANALYSIS
+# CLAUDE ANALYSIS — returns structured JSON
 # ─────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an H&S compliance checker for Ashvale Civil Engineering.
-Analyse Safety Culture inspections and identify all issues.
+Analyse the Safety Culture inspection and return ONLY valid JSON — no markdown, no explanation.
 
-Check for:
-1. Missing serial numbers or plant IDs — equipment with a status (Safe/At Risk/Fail) but no serial number or ID recorded in the text or note field
-2. Equipment with no status at all
-3. Missing supervisor sign-off
-4. Any equipment marked At Risk — must be flagged for plant team
-5. Missing or incomplete dates
-6. Any other LOLER/PUWER compliance gaps
+JSON schema:
+{
+  "puwer":        "Y" | "N" | "N/A",
+  "loler":        "Y" | "N" | "N/A",
+  "site_sup":     "Y" | "N" | "N/A",
+  "xcavator":     "Y" | "N" | "N/A",
+  "dumper":       "Y" | "N" | "N/A",
+  "roller":       "Y" | "N" | "N/A",
+  "telehand":     "Y" | "N" | "N/A",
+  "havs":         "Y" | "N" | "N/A",
+  "toolbox":      "Y" | "N" | "N/A",
+  "rams":         "Y" | "N" | "N/A",
+  "note":         "string or empty string",
+  "note_severity": "critical" | "warning" | "none",
+  "warning_cells": ["list of keys from above that should be highlighted yellow"]
+}
 
-Respond in this exact format:
-
-CRITICAL:
-- [issue] or None
-
-WARNINGS:
-- [issue] or None
-
-PASSED:
-- [item]
-
-VERDICT: [one sentence]"""
+Rules:
+- Y  = inspection completed and compliant
+- N  = inspection done but failed / issue found
+- N/A = equipment not present on site
+- warning_cells = any key above where the value is N or there is a specific issue with that item
+- note_severity = "critical" if any serious breach (missing serials, daily checks not done, At Risk equipment),
+                  "warning" if minor / incomplete (e.g. not yet done, one item pending),
+                  "none" if fully clear
+- note = one concise sentence describing the issue, or empty string if none"""
 
 
 def analyse_with_claude(parsed):
-    """Send inspection to Claude for compliance analysis"""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
         model="claude-opus-4-7",
-        max_tokens=1000,
+        max_tokens=512,
         system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f"INSPECTION DATA:\n{parsed['full_text']}"
-            }
-        ]
+        messages=[{"role": "user", "content": f"INSPECTION DATA:\n{parsed['full_text']}"}],
     )
 
-    return message.content[0].text
+    raw = message.content[0].text.strip()
+    # Strip any accidental markdown fences
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
 
 
 # ─────────────────────────────────────────
-# EMAIL REPORT
+# BUILD EXCEL
 # ─────────────────────────────────────────
 
-def build_email(results):
-    """Build HTML email from list of results"""
-    today = datetime.now().strftime("%d %b %Y")
-    has_any_critical = any(r.get("has_critical") for r in results)
+def build_excel(results):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = datetime.now().strftime("%d %b %Y")
+
+    # ── Header row ──
+    for col_idx, (header, width) in enumerate(COLUMNS, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill      = FILL_RAMS_HDR if header == "RAMS" else FILL_HEADER
+        cell.font      = FONT_HEADER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border    = THIN_BORDER
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+
+    ws.row_dimensions[1].height = 22
+
+    # ── Data rows ──
+    for row_idx, r in enumerate(results, start=2):
+        analysis = r.get("analysis", {})
+        warn_cells  = set(analysis.get("warning_cells", []))
+        note        = analysis.get("note", "")
+        severity    = analysis.get("note_severity", "none")
+
+        row_data = [
+            r["site"],
+            r.get("job_no", ""),
+            analysis.get("puwer",    ""),
+            analysis.get("loler",    ""),
+            analysis.get("site_sup", ""),
+            analysis.get("xcavator", ""),
+            analysis.get("dumper",   ""),
+            analysis.get("roller",   ""),
+            analysis.get("telehand", ""),
+            analysis.get("havs",     ""),
+            analysis.get("toolbox",  ""),
+            analysis.get("rams",     ""),
+            r["supervisor"],
+            note,
+        ]
+
+        for col_idx, value in enumerate(row_data, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border    = THIN_BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+            header = COLUMNS[col_idx - 1][0]
+            key    = COL_KEY.get(header)
+
+            # Colour logic
+            if header == "NOTES":
+                if severity == "critical":
+                    cell.fill = FILL_RED
+                    cell.font = FONT_WHITE
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                elif severity == "warning":
+                    cell.fill = FILL_YELLOW
+                    cell.font = FONT_BLACK
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            elif key and key in warn_cells:
+                cell.fill = FILL_YELLOW
+                cell.font = FONT_BLACK
+            else:
+                cell.font = FONT_BLACK
+
+        ws.row_dimensions[row_idx].height = 18
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────
+# EMAIL WITH XLSX ATTACHMENT
+# ─────────────────────────────────────────
+
+def send_email(results, xlsx_buf):
+    today          = datetime.now().strftime("%d %b %Y")
+    has_critical   = any(r.get("analysis", {}).get("note_severity") == "critical" for r in results)
+    filename       = f"Ashvale_Inspections_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
 
     subject = (
         f"⚠️ Ashvale Inspections — Action Required — {today}"
-        if has_any_critical
+        if has_critical
         else f"✅ Ashvale Inspections — All Clear — {today}"
     )
 
-    html = f"""<html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
-<div style="max-width:700px;margin:0 auto;background:white;border-radius:8px;overflow:hidden;">
-  <div style="background:#1a1a2e;padding:24px;color:white;">
-    <h1 style="margin:0;font-size:22px;">Ashvale Civil Engineering</h1>
-    <p style="margin:4px 0 0;opacity:0.7;font-size:14px;">Daily Inspection Report — {today}</p>
-  </div>
-  <div style="padding:20px;">"""
+    body_text = (
+        f"Ashvale Civil Engineering — Daily Inspection Report\n"
+        f"Date: {today}\n"
+        f"Inspections processed: {len(results)}\n\n"
+        f"Please find the formatted Excel report attached.\n"
+        + ("⚠️  One or more sites require action — see red rows in the spreadsheet." if has_critical else "✅  All inspections clear.")
+    )
 
-    for r in results:
-        border       = "#e05c3a" if r.get("has_critical") else "#28a745"
-        status_label = "⚠️ ACTION REQUIRED" if r.get("has_critical") else "✅ CLEAR"
-        status_color = "#e05c3a" if r.get("has_critical") else "#28a745"
-        analysis_html = r.get("analysis", "No analysis").replace("\n", "<br>")
-
-        html += f"""
-    <div style="border:1px solid #e0e0e0;border-left:4px solid {border};border-radius:6px;margin-bottom:16px;">
-      <div style="background:#f8f8f8;padding:12px 16px;border-bottom:1px solid #e0e0e0;">
-        <strong style="font-size:15px;">{r['site']}</strong>
-        <span style="float:right;color:{status_color};font-weight:bold;font-size:13px;">{status_label}</span>
-      </div>
-      <div style="padding:10px 16px;font-size:12px;color:#666;">
-        📅 {r['date']} &nbsp;|&nbsp; 👤 {r['supervisor']} &nbsp;|&nbsp;
-        📊 {r['score']} &nbsp;|&nbsp; ✍️ {'Signed' if r['signed'] else '❌ NOT SIGNED'}
-      </div>
-      <div style="padding:12px 16px;font-size:13px;color:#333;font-family:monospace;white-space:pre-wrap;line-height:1.6;">{analysis_html}</div>
-    </div>"""
-
-    html += """
-  </div>
-  <div style="background:#f8f8f8;padding:16px;text-align:center;font-size:12px;color:#888;border-top:1px solid #e0e0e0;">
-    Ashvale Civil Engineering — Automated H&S Inspection Report
-  </div>
-</div>
-</body></html>"""
-
-    return subject, html
-
-
-def send_email(subject, html_body):
-    """Send the report email"""
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart()
     msg["Subject"] = subject
     msg["From"]    = EMAIL_FROM
     msg["To"]      = EMAIL_TO
-    msg.attach(MIMEText(html_body, "html"))
+    msg.attach(MIMEText(body_text, "plain"))
+
+    part = MIMEBase("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    part.set_payload(xlsx_buf.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+    msg.attach(part)
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.starttls()
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
 
-    print(f"  Email sent to {EMAIL_TO}")
+    print(f"  Email sent → {EMAIL_TO}  ({filename})")
 
 
 # ─────────────────────────────────────────
@@ -292,18 +396,11 @@ def main():
                 print(f"    Analysing with Claude...")
                 analysis = analyse_with_claude(parsed)
 
-                has_critical = False
-                if "CRITICAL:" in analysis:
-                    critical_section = analysis.split("CRITICAL:")[1].split("WARNINGS:")[0]
-                    has_critical = "none" not in critical_section.lower()
+                severity = analysis.get("note_severity", "none")
+                icon     = "🔴" if severity == "critical" else ("🟡" if severity == "warning" else "✅")
+                print(f"    → {icon} {severity.upper()}")
 
-                all_results.append({
-                    **parsed,
-                    "analysis":     analysis,
-                    "has_critical": has_critical,
-                })
-
-                print(f"    → {'⚠️  Issues found' if has_critical else '✅ Clear'}")
+                all_results.append({**parsed, "analysis": analysis})
 
             except Exception as e:
                 print(f"    Error processing {audit_id}: {e}")
@@ -312,10 +409,11 @@ def main():
         print("\nNo inspections found. No email sent.")
         return
 
-    print(f"\nBuilding email for {len(all_results)} inspection(s)...")
-    subject, html = build_email(all_results)
-    print(f"Sending: {subject}")
-    send_email(subject, html)
+    print(f"\nBuilding Excel for {len(all_results)} inspection(s)...")
+    xlsx_buf = build_excel(all_results)
+
+    print("Sending email with attachment...")
+    send_email(all_results, xlsx_buf)
     print("\nDone ✓")
 
 
