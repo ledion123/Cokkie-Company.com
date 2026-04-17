@@ -1,0 +1,230 @@
+{
+  "name": "Ashvale Daily Inspection Checker",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "cronExpression": "0 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a1000000-0000-0000-0000-000000000001",
+      "name": "Mon–Fri 7am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const modifiedAfter = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();\nconst base = `modified_after=${encodeURIComponent(modifiedAfter)}&completed=true&limit=100&field=audit_id&field=modified_at&field=template_id`;\nconst templates = [\n  'template_7dbbb416041a44459216a2a0ba02bb10',\n  'template_0a8a57e828e746f782b2659da47f398d'\n];\nreturn templates.map(id => ({\n  json: {\n    templateId: id,\n    searchUrl: `https://api.safetyculture.io/audits/search?template=${id}&${base}`\n  }\n}));"
+      },
+      "id": "a1000000-0000-0000-0000-000000000002",
+      "name": "Template IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.searchUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000003",
+      "name": "Search SafetyCulture",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_SC_CRED_ID",
+          "name": "SafetyCulture API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = [];\nfor (const item of $input.all()) {\n  const audits = item.json.audits || [];\n  const sorted = [...audits]\n    .sort((a, b) => (b.modified_at || '').localeCompare(a.modified_at || ''))\n    .slice(0, 20);\n  for (const audit of sorted) {\n    if (audit.audit_id) allItems.push({ json: { audit_id: audit.audit_id } });\n  }\n}\nconst seen = new Set();\nreturn allItems.filter(i => {\n  if (seen.has(i.json.audit_id)) return false;\n  seen.add(i.json.audit_id);\n  return true;\n});"
+      },
+      "id": "a1000000-0000-0000-0000-000000000004",
+      "name": "Extract Audit IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.safetyculture.io/audits/{{ $json.audit_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000005",
+      "name": "Get Inspection Detail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_SC_CRED_ID",
+          "name": "SafetyCulture API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const inspection = $input.item.json;\nconst auditData    = inspection.audit_data    || {};\nconst templateData = inspection.template_data || {};\nconst items        = inspection.items         || [];\n\nconst site         = auditData.site?.name                  || 'Unknown Site';\nconst supervisor   = auditData.authorship?.owner           || 'Unknown';\nconst dateStr      = auditData.date_started                || '';\nconst completed    = auditData.date_completed;\nconst score        = auditData.score        ?? '';\nconst total        = auditData.total_score  ?? '';\nconst pct          = auditData.score_percentage ?? '';\nconst jobNo        = auditData.reference_id || (inspection.audit_id || '').substring(0, 8);\nconst templateName = templateData.metadata?.name || 'Unknown Template';\n\nlet dateFormatted = dateStr;\ntry {\n  dateFormatted = new Date(dateStr).toLocaleDateString('en-GB', {\n    day: '2-digit', month: 'short', year: 'numeric',\n    hour: '2-digit', minute: '2-digit'\n  });\n} catch(e) {}\n\nconst lines = [];\nfor (const item of items) {\n  const label    = (item.label            || '').trim();\n  if (!label) continue;\n  const responses = item.responses        || {};\n  const selected  = responses.selected   || [];\n  const textResp  = (responses.text      || '').trim();\n  const note      = (item.note           || '').trim();\n  const status    = selected[0]?.label?.trim() || '';\n  let line = label;\n  if (status)   line += `: ${status}`;\n  if (textResp) line += ` | text: ${textResp}`;\n  if (note)     line += ` | note: ${note}`;\n  lines.push(line);\n}\n\nconst fullText = [\n  `Template: ${templateName}`,\n  `Site: ${site}`,\n  `Date: ${dateFormatted}`,\n  `Supervisor: ${supervisor}`,\n  `Score: ${score} / ${total} (${pct}%)`,\n  `Signed Off: ${completed ? 'Yes' : 'No'}`,\n  '',\n  'EQUIPMENT / ITEMS:',\n  ...lines\n].join('\\n');\n\nreturn [{ json: {\n  audit_id:      inspection.audit_id || '',\n  site,\n  job_no:        jobNo,\n  supervisor,\n  date:          dateFormatted,\n  signed:        Boolean(completed),\n  template_name: templateName,\n  full_text:     fullText\n}}];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000006",
+      "name": "Parse Inspection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json;\n\nconst systemPrompt = [\n  'You are an H&S compliance checker for Ashvale Civil Engineering.',\n  'Analyse the Safety Culture inspection and return ONLY valid JSON — no markdown, no explanation.',\n  '',\n  'JSON schema:',\n  '{',\n  '  \"puwer\":        \"Y\" | \"N\" | \"N/A\",',\n  '  \"loler\":        \"Y\" | \"N\" | \"N/A\",',\n  '  \"site_sup\":     \"Y\" | \"N\" | \"N/A\",',\n  '  \"xcavator\":     \"Y\" | \"N\" | \"N/A\",',\n  '  \"dumper\":       \"Y\" | \"N\" | \"N/A\",',\n  '  \"roller\":       \"Y\" | \"N\" | \"N/A\",',\n  '  \"telehand\":     \"Y\" | \"N\" | \"N/A\",',\n  '  \"havs\":         \"Y\" | \"N\" | \"N/A\",',\n  '  \"toolbox\":      \"Y\" | \"N\" | \"N/A\",',\n  '  \"rams\":         \"Y\" | \"N\" | \"N/A\",',\n  '  \"note\":         \"string or empty string\",',\n  '  \"note_severity\": \"critical\" | \"warning\" | \"none\",',\n  '  \"warning_cells\": [\"list of keys to highlight yellow\"]',\n  '}',\n  '',\n  'Rules:',\n  '- Y  = completed and compliant',\n  '- N  = failed or issue found',\n  '- N/A = equipment not present on site',\n  '- warning_cells = keys where value is N or specific issue exists',\n  '- note_severity: critical=serious breach (missing serials, checks not done, At Risk), warning=minor/incomplete, none=clear',\n  '- note = one concise sentence or empty string'\n].join('\\n');\n\nconst claudeBody = JSON.stringify({\n  model: 'claude-opus-4-7',\n  max_tokens: 512,\n  system: systemPrompt,\n  messages: [{ role: 'user', content: `INSPECTION DATA:\\n${data.full_text}` }]\n});\n\nreturn [{ json: { ...data, _claudeBody: claudeBody } }];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000007",
+      "name": "Prepare Claude Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type",      "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._claudeBody }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000008",
+      "name": "Claude Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1740, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ANTHROPIC_CRED_ID",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResp   = $input.item.json;\nconst claudeText   = claudeResp.content?.[0]?.text || '{}';\nconst inspData     = $('Prepare Claude Request').item.json;\n\nlet analysis = {};\ntry {\n  let raw = claudeText.trim();\n  if (raw.startsWith('```')) {\n    raw = raw.split('```')[1];\n    if (raw.startsWith('json')) raw = raw.substring(4);\n  }\n  analysis = JSON.parse(raw.trim());\n} catch(e) {\n  analysis = {\n    puwer:'', loler:'', site_sup:'', xcavator:'', dumper:'',\n    roller:'', telehand:'', havs:'', toolbox:'', rams:'',\n    note: 'Analysis parse error',\n    note_severity: 'warning',\n    warning_cells: []\n  };\n}\n\nreturn [{ json: {\n  site:          inspData.site,\n  job_no:        inspData.job_no,\n  supervisor:    inspData.supervisor,\n  date:          inspData.date,\n  signed:        inspData.signed,\n  template_name: inspData.template_name,\n  analysis\n}}];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000009",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 300]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "results",
+        "include": "allFields",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000010",
+      "name": "Collect Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [2180, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Requires exceljs ──────────────────────────────────────────────\n// In your n8n environment add: NODE_FUNCTION_ALLOW_EXTERNAL=exceljs\n// Then: npm install exceljs  (in your n8n directory)\n// ──────────────────────────────────────────────────────────────────\nconst ExcelJS = require('exceljs');\n\nconst results = $input.item.json.results || [];\nconst today   = new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'});\nconst dateSlug = new Date().toISOString().split('T')[0];\n\nconst wb = new ExcelJS.Workbook();\nconst ws = wb.addWorksheet(today);\n\nconst COLS = [\n  { header: 'SITE',       key: 'site',       width: 22 },\n  { header: 'JOB NO',     key: 'job_no',     width: 9  },\n  { header: 'PUWER',      key: 'puwer',      width: 8  },\n  { header: 'LOLER',      key: 'loler',      width: 8  },\n  { header: 'SITE SUP',   key: 'site_sup',   width: 9  },\n  { header: 'XCAVATOR',   key: 'xcavator',   width: 10 },\n  { header: 'DUMPER',     key: 'dumper',     width: 9  },\n  { header: 'ROLLER',     key: 'roller',     width: 9  },\n  { header: 'TELEHAND',   key: 'telehand',   width: 11 },\n  { header: 'HAVS',       key: 'havs',       width: 8  },\n  { header: 'TOOLBOX',    key: 'toolbox',    width: 10 },\n  { header: 'RAMS',       key: 'rams',       width: 8  },\n  { header: 'SUPERVISOR', key: 'supervisor', width: 16 },\n  { header: 'NOTES',      key: 'notes',      width: 45 },\n];\nws.columns = COLS;\n\nconst COL_KEY = {\n  'PUWER':    'puwer',  'LOLER':   'loler',    'SITE SUP': 'site_sup',\n  'XCAVATOR': 'xcavator', 'DUMPER': 'dumper',  'ROLLER':   'roller',\n  'TELEHAND': 'telehand', 'HAVS':  'havs',     'TOOLBOX':  'toolbox',\n  'RAMS':     'rams'\n};\n\nconst BORDER = {\n  top:{style:'thin'}, left:{style:'thin'},\n  bottom:{style:'thin'}, right:{style:'thin'}\n};\n\n// ── Header row ──────────────────────────────────────────────────────\nconst hdrRow = ws.getRow(1);\nhdrRow.height = 22;\nhdrRow.eachCell(cell => {\n  cell.fill      = { type:'pattern', pattern:'solid',\n                     fgColor:{ argb: cell.value === 'RAMS' ? 'FFFFFF00' : 'FFF4A460' } };\n  cell.font      = { bold: true };\n  cell.alignment = { horizontal:'center', vertical:'middle', wrapText:true };\n  cell.border    = BORDER;\n});\n\n// ── Data rows ───────────────────────────────────────────────────────\nfor (const r of results) {\n  const a    = r.analysis || {};\n  const warn = new Set(a.warning_cells || []);\n  const note = a.note          || '';\n  const sev  = a.note_severity || 'none';\n\n  const row = ws.addRow([\n    r.site,       r.job_no,\n    a.puwer,      a.loler,    a.site_sup,\n    a.xcavator,   a.dumper,   a.roller,   a.telehand,\n    a.havs,       a.toolbox,  a.rams,\n    r.supervisor, note\n  ]);\n  row.height = 18;\n\n  row.eachCell((cell, col) => {\n    const hdr = COLS[col - 1].header;\n    const key = COL_KEY[hdr];\n    cell.border    = BORDER;\n    cell.alignment = { horizontal:'center', vertical:'middle', wrapText:true };\n\n    if (hdr === 'NOTES') {\n      if (sev === 'critical') {\n        cell.fill      = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFF0000' } };\n        cell.font      = { bold:true, color:{ argb:'FFFFFFFF' } };\n        cell.alignment = { horizontal:'left', vertical:'middle', wrapText:true };\n      } else if (sev === 'warning') {\n        cell.fill      = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFFF00' } };\n        cell.alignment = { horizontal:'left', vertical:'middle', wrapText:true };\n      }\n    } else if (key && warn.has(key)) {\n      cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFFF00' } };\n    }\n  });\n}\n\nws.views = [{ state:'frozen', ySplit:1 }];\n\n// ── Serialise ───────────────────────────────────────────────────────\nconst buf      = await wb.xlsx.writeBuffer();\nconst b64      = Buffer.from(buf).toString('base64');\nconst hasCrit  = results.some(r => r.analysis?.note_severity === 'critical');\nconst subject  = hasCrit\n  ? `⚠️ Ashvale Inspections — Action Required — ${today}`\n  : `✅ Ashvale Inspections — All Clear — ${today}`;\nconst body     = [\n  `Ashvale Civil Engineering — Daily Inspection Report`,\n  `Date: ${today}`,\n  `Inspections processed: ${results.length}`,\n  '',\n  hasCrit\n    ? '⚠️  One or more sites require action — see red rows in the spreadsheet.'\n    : '✅  All inspections clear.',\n  '',\n  'Please find the Excel report attached.'\n].join('\\n');\n\nreturn [{\n  json: {\n    subject,\n    body,\n    filename: `Ashvale_Inspections_${dateSlug}.xlsx`\n  },\n  binary: {\n    attachment: {\n      data:     b64,\n      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n      fileName: `Ashvale_Inspections_${dateSlug}.xlsx`\n    }\n  }\n}];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000011",
+      "name": "Build Excel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "YOUR_EMAIL@gmail.com",
+        "toEmail": "YOUR_EMAIL@ashvale.co.uk",
+        "subject": "={{ $json.subject }}",
+        "text": "={{ $json.body }}",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              { "property": "attachment" }
+            ]
+          }
+        }
+      },
+      "id": "a1000000-0000-0000-0000-000000000012",
+      "name": "Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2620, 300],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_SMTP_CRED_ID",
+          "name": "SMTP Gmail"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Mon–Fri 7am": {
+      "main": [[{ "node": "Template IDs",         "type": "main", "index": 0 }]]
+    },
+    "Template IDs": {
+      "main": [[{ "node": "Search SafetyCulture",  "type": "main", "index": 0 }]]
+    },
+    "Search SafetyCulture": {
+      "main": [[{ "node": "Extract Audit IDs",     "type": "main", "index": 0 }]]
+    },
+    "Extract Audit IDs": {
+      "main": [[{ "node": "Get Inspection Detail", "type": "main", "index": 0 }]]
+    },
+    "Get Inspection Detail": {
+      "main": [[{ "node": "Parse Inspection",      "type": "main", "index": 0 }]]
+    },
+    "Parse Inspection": {
+      "main": [[{ "node": "Prepare Claude Request","type": "main", "index": 0 }]]
+    },
+    "Prepare Claude Request": {
+      "main": [[{ "node": "Claude Analysis",       "type": "main", "index": 0 }]]
+    },
+    "Claude Analysis": {
+      "main": [[{ "node": "Parse Claude Response", "type": "main", "index": 0 }]]
+    },
+    "Parse Claude Response": {
+      "main": [[{ "node": "Collect Results",       "type": "main", "index": 0 }]]
+    },
+    "Collect Results": {
+      "main": [[{ "node": "Build Excel",           "type": "main", "index": 0 }]]
+    },
+    "Build Excel": {
+      "main": [[{ "node": "Email Report",          "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
