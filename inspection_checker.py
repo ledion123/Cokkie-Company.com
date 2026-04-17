@@ -26,7 +26,7 @@ ANTHROPIC_API_KEY     = "YOUR_ANTHROPIC_API_KEY"
 
 TEMPLATE_IDS = [
     "template_7dbbb416041a44459216a2a0ba02bb10",  # LOLER Inspection
-    # "template_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",  # PUWER — add when ready
+    "template_0a8a57e828e746f782b2659da47f398d",  # Equipment Inspection
 ]
 
 SMTP_SERVER    = "smtp.gmail.com"
