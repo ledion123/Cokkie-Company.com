@@ -2,6 +2,7 @@
 SafetyCulture (iAuditor) API client.
 Docs: https://developer.safetyculture.com/reference
 """
+from __future__ import annotations
 
 import os
 import time
@@ -12,7 +13,7 @@ BASE_URL = "https://api.safetyculture.io"
 
 
 class SCClient:
-    def __init__(self, token: str = None):
+    def __init__(self, token: str | None = None):
         self.token = token or os.environ["SC_API_TOKEN"]
         self.session = requests.Session()
         self.session.headers.update({

@@ -2,6 +2,7 @@
 Maps Excel site names / job numbers to SafetyCulture site IDs.
 SC site IDs are fetched live from the API on first run and cached.
 """
+from __future__ import annotations
 
 from fuzzywuzzy import process
 
@@ -125,6 +126,6 @@ LINMERE_SITES = {
 def flag_linmere_ambiguity(excel_site: str, excel_job: str) -> str | None:
     s = (excel_site or "").lower()
     j = str(excel_job or "").lower()
-    if "linmere" in s and "dan05" not in j and "dan03" not in j and "dn 05" not in j:
+    if "linmere" in s and not any(k in j for k in ("dan05", "dan005", "dan03", "dan003", "dn 05")):
         return "⚠️ Ambiguous Linmere — specify DAN003 (Waterslade Way) or DAN005 (Bedford Rd)"
     return None

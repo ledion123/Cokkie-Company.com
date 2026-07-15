@@ -11,6 +11,7 @@ Usage:
 Outputs:
   <excel_basename>_FILLED_<week>.xlsx  in the same folder as the input Excel.
 """
+from __future__ import annotations
 
 import argparse
 import sys
@@ -22,7 +23,9 @@ from collections import defaultdict
 from dotenv import load_dotenv
 
 from api import SCClient
-from check_types import classify_template, audit_status, STATUS_MISSING, STATUS_NA
+from check_types import (classify_template, audit_status,
+                         STATUS_COMPLETE, STATUS_IN_PROGRESS,
+                         STATUS_MISSING, STATUS_NA)
 from excel_handler import read_sites, write_results
 from pdf_parser import parse_pdf, summarise_equipment
 from site_lookup import resolve_site_name
@@ -63,7 +66,7 @@ def build_sc_site_map(client: SCClient, canonical_names: list[str]) -> dict[str,
     return result
 
 
-def run(excel_path: str, pdf_path: str, week_ref: str = None):
+def run(excel_path: str, pdf_path: str, week_ref: str | None = None):
     token = os.environ.get("SC_API_TOKEN")
     if not token:
         sys.exit("❌ SC_API_TOKEN not set. Copy .env.example to .env and fill in your token.")
@@ -144,10 +147,10 @@ def run(excel_path: str, pdf_path: str, week_ref: str = None):
                 # Don't flag as missing if week is still in progress and it's
                 # a daily check that could come in later
                 checks[col] = STATUS_MISSING
-            elif "✅" in statuses:
-                checks[col] = "✅"
+            elif STATUS_COMPLETE in statuses:
+                checks[col] = STATUS_COMPLETE
             else:
-                checks[col] = "🔄"
+                checks[col] = STATUS_IN_PROGRESS
 
         # Build notes string
         notes_parts = []

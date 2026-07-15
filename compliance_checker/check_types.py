@@ -4,6 +4,7 @@ Maps SafetyCulture template names → Excel column check types.
 Each CHECK_TYPE entry lists keywords that, if found in the template name
 (case-insensitive), classify the audit into that column.
 """
+from __future__ import annotations
 
 # Order matters: plant-specific PUWER daily checks MUST come before the
 # generic PUWER register, otherwise they'd all match "puwer" first.

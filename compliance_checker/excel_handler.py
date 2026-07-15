@@ -1,6 +1,7 @@
 """
 Read the weekly Excel template and write compliance results back.
 """
+from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -43,7 +44,7 @@ def _col_index(headers: list[str | None]) -> dict[str, int]:
     for i, h in enumerate(headers):
         if h is None:
             continue
-        key = re.sub(r"[\s\r\n]+", " ", str(h)).strip().lower().rstrip()
+        key = re.sub(r"[\s\r\n]+", " ", str(h)).strip().lower()
         idx[key] = i
     return idx
 
@@ -64,7 +65,7 @@ def read_sites(xlsx_path: str) -> list[dict]:
     idx = _col_index(headers)
 
     sites = []
-    for row in rows[1:]:
+    for row_num, row in enumerate(rows[1:], start=2):
         site_val = row[idx.get(COL_SITE, 0)] if COL_SITE in idx else None
         job_val  = row[idx.get(COL_JOB, 1)]  if COL_JOB  in idx else None
         sup_val  = row[idx.get(COL_SUPERVISOR, len(row)-1)] if COL_SUPERVISOR in idx else None
@@ -81,6 +82,7 @@ def read_sites(xlsx_path: str) -> list[dict]:
             "canonical":  canonical,
             "supervisor": str(sup_val or "").strip(),
             "ambiguity":  ambiguity,
+            "row":        row_num,
         })
 
     return sites
@@ -106,13 +108,12 @@ def write_results(
     headers = [str(h).strip().lower() if h else None for h in header_row]
     idx = _col_index(headers)
 
-    # Add week label in cell A1 if blank
+    # Write week label after the last header column so it doesn't overwrite data
     if week_label:
-        ws["A1"] = f"Week: {week_label}  |  " + (str(ws["A1"].value) or "")
+        ws.cell(row=1, column=ws.max_column + 2).value = f"Week: {week_label}"
 
-    for row_num, (row_data, result) in enumerate(
-        zip(ws.iter_rows(min_row=2), results), start=2
-    ):
+    for result in results:
+        row_num = result["row"]
         checks = result.get("checks", {})
         notes  = result.get("notes", "")
 
@@ -122,7 +123,7 @@ def write_results(
             col_i = idx[col_name.lower()] + 1  # openpyxl is 1-based
             cell  = ws.cell(row=row_num, column=col_i)
 
-            status = checks.get(col_name, STATUS_MISSING)
+            status = checks.get(col_name.upper(), STATUS_MISSING)
 
             cell.value     = status
             cell.alignment = Alignment(horizontal="center")

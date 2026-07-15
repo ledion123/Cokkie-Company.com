@@ -1,6 +1,7 @@
 """
 Week calculation helpers. Weeks run Mon–Sun, Europe/London timezone.
 """
+from __future__ import annotations
 
 from datetime import datetime, timedelta, date
 import pytz

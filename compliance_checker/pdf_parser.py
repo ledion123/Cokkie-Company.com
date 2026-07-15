@@ -2,29 +2,11 @@
 Parse the "WHAT'S OUT WHERE" PDF to build a per-site equipment register.
 Returns: {canonical_site_name: {"excavators": [...], "dumpers": [...], ...}}
 """
+from __future__ import annotations
 
 import re
 import pdfplumber
 from site_lookup import resolve_site_name
-
-# Plant type patterns (order matters — most specific first)
-PLANT_PATTERNS = [
-    ("telehandler", re.compile(r"\bTELEHANDLER\b.*?[-–]\s*(TL\s*\d+)", re.I)),
-    ("roller",      re.compile(r"\b(120|170|RAMMAX|HAMM|ROR)\s*ROLLER.*?[-–]\s*(ROR\s*\d+|RAM\s*\d+)", re.I)),
-    ("excavator",   re.compile(r"\b(\d+(?:\.\d+)?T)\s*EXC.*?[-–]\s*(ASH\s*\d+)", re.I)),
-    ("dumper",      re.compile(r"\b(\d+T)\s*DUMP.*?[-–]\s*(ASH\s*\d+)", re.I)),
-]
-
-# Match a site header line, e.g. "DENNY END RD, WATERBEACH [LP0010]"
-SITE_LINE_RE = re.compile(
-    r"^([A-Z][A-Z0-9 ,\.'\-]+?)\s+(\d+T\s+EXC|\d+T\s+DUMP|TELEHANDLER|ROLLER|RAMMAX|120\s+ROLLER|170\s+ROLLER)",
-    re.I,
-)
-
-# Each row in the PDF is "SITE NAME   EQUIPMENT DESCRIPTION"
-ROW_RE = re.compile(
-    r"^(.+?)\s{2,}(.+)$"
-)
 
 
 def _extract_id(text: str) -> str | None:
