@@ -5,24 +5,53 @@ Each CHECK_TYPE entry lists keywords that, if found in the template name
 (case-insensitive), classify the audit into that column.
 """
 
-# Order matters for overlap: more specific patterns first.
-# Confirmed SC template names are listed first in each tuple; guesses follow.
+# Order matters: plant-specific PUWER daily checks MUST come before the
+# generic PUWER register, otherwise they'd all match "puwer" first.
+# Confirmed SC template names are marked ✅.
 CHECK_COLUMNS = [
-    ("LOLER",    ["loler"]),
-    ("PUWER",    [
-        "puwer equipment register & inspection",  # ✅ confirmed
-        "puwer",
+    ("LOLER",    [
+        "loler inspection",                                  # ✅ confirmed
+        "loler",
     ]),
-    ("SITE SUP", ["site supervisor", "supervisor weekly", "ss weekly", "site sup"]),
-    ("EXCAVATOR",["excavator daily", "exc daily", "excavator check", "14t check",
-                  "8t check", "20t check", "25t check", "3t exc", "6t exc"]),
-    ("DUMPER",   ["dumper daily", "dumper check", "9t check", "6t dump", "3t dump"]),
-    ("ROLLER",   ["roller daily", "roller check", "ror daily", "roller inspection"]),
-    ("TELEHAND", ["telehandler daily", "telehandler check", "tele daily", "tl daily"]),
-    ("HAVS",     ["hav operative", "hav/noise", "hav noise", "havs", "hav daily",
-                  "hand arm", "noise dust"]),
-    ("TOOLBOX",  ["toolbox", "tool box", "tbt"]),
-    ("RAMS",     ["rams", "risk assessment", "method statement"]),
+    # Plant daily checks (all start with "PUWER" — matched before generic PUWER)
+    ("EXCAVATOR", [
+        "puwer excavator daily check sheet",                 # ✅ confirmed
+        "excavator daily", "exc daily", "excavator check",
+    ]),
+    ("DUMPER",    [
+        "puwer dumper daily check sheet",                    # ✅ confirmed
+        "dumper daily", "dumper check",
+    ]),
+    ("ROLLER",    [
+        "puwer ride on roller daily check sheet",            # ✅ confirmed
+        "roller daily", "roller check", "ror daily",
+    ]),
+    ("TELEHAND",  [
+        "puwer telescopic- handler daily check sheet",       # ✅ confirmed
+        "puwer telescopic handler daily check sheet",        # variant without hyphen
+        "telehandler daily", "telehandler check", "tele daily",
+    ]),
+    # Generic PUWER register (weekly) — matched AFTER plant dailies
+    ("PUWER",    [
+        "puwer equipment register & inspection",             # ✅ confirmed
+        "puwer equipment register",
+    ]),
+    ("SITE SUP", [
+        "site supervisor weekly inspection",                 # ✅ confirmed
+        "site supervisor", "supervisor weekly", "ss weekly",
+    ]),
+    ("HAVS",     [
+        "hav / noise / dust daily monitoring",               # ✅ confirmed
+        "hav / noise", "hav/noise", "hav noise", "havs",
+        "hav operative", "hand arm", "noise dust",
+    ]),
+    ("TOOLBOX",  [
+        "tool box talk",                                     # ✅ confirmed
+        "toolbox talk", "toolbox", "tbt",
+    ]),
+    ("RAMS",     [
+        "rams", "risk assessment", "method statement",       # unconfirmed – update when known
+    ]),
 ]
 
 # Status symbols
