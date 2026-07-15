@@ -1,2 +1,14 @@
 #ingore all .txt files
 *.txt
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment secrets
+compliance_checker/.env
