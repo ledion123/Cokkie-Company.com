@@ -6,9 +6,13 @@ Each CHECK_TYPE entry lists keywords that, if found in the template name
 """
 
 # Order matters for overlap: more specific patterns first.
+# Confirmed SC template names are listed first in each tuple; guesses follow.
 CHECK_COLUMNS = [
     ("LOLER",    ["loler"]),
-    ("PUWER",    ["puwer"]),
+    ("PUWER",    [
+        "puwer equipment register & inspection",  # ✅ confirmed
+        "puwer",
+    ]),
     ("SITE SUP", ["site supervisor", "supervisor weekly", "ss weekly", "site sup"]),
     ("EXCAVATOR",["excavator daily", "exc daily", "excavator check", "14t check",
                   "8t check", "20t check", "25t check", "3t exc", "6t exc"]),
